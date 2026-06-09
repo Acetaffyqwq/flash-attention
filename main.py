@@ -1,54 +1,49 @@
 import transformer
-import flash_attention
-import flash_triton
+import flash_attention_backward
 import torch
-import time
 
-batch = 8
+torch.set_default_device("cuda")
+
+batch = 2
 dim = 64
-seq_lens = [512, 1024, 2048, 4096]
+seq_lens = [128, 256, 512]
+Q_batch = 64
+K_batch = 64
 
 print(
-    f"{'seq_len':>6} | {'naive_time':>10} | {'flash_time':>10} | {'naive_mem':>10} | {'flash_mem':>10} | {'max_diff':>10}"
+    f"{'seq_len':>6} | {'out_diff':>12} | {'dQ_diff':>12} | {'dK_diff':>12} | {'dV_diff':>12}"
 )
-print("-" * 80)
+print("-" * 68)
 
 for seq_len in seq_lens:
     Q = torch.randn(batch, seq_len, dim, device="cuda")
     K = torch.randn(batch, seq_len, dim, device="cuda")
     V = torch.randn(batch, seq_len, dim, device="cuda")
 
-    Test = flash_triton.flash_attention(Q, K, V)
+    # === reference: transformer with autograd ===
+    Q_ref = Q.clone().detach().requires_grad_(True)
+    K_ref = K.clone().detach().requires_grad_(True)
+    V_ref = V.clone().detach().requires_grad_(True)
 
-    # === naive attention ===
-    with torch.no_grad():
-        for _ in range(3):
-            _ = transformer.self_attention(Q, K, V)
-        torch.cuda.synchronize()
-        torch.cuda.reset_peak_memory_stats()
+    out_ref = transformer.self_attention(Q_ref, K_ref, V_ref)
+    out_ref.sum().backward()
 
-        t0 = time.time()
-        naive_result = transformer.self_attention(Q, K, V)
-        torch.cuda.synchronize()
-    naive_time = (time.time() - t0) * 1000
-    naive_mem = torch.cuda.max_memory_allocated() / 1024**2
+    # === flash attention with custom backward ===
+    Q_flash = Q.clone().detach().requires_grad_(True)
+    K_flash = K.clone().detach().requires_grad_(True)
+    V_flash = V.clone().detach().requires_grad_(True)
 
-    # === flash attention ===
-    with torch.no_grad():
-        for _ in range(3):
-            _ = flash_triton.flash_attention(Q, K, V)
-        torch.cuda.synchronize()
-        torch.cuda.reset_peak_memory_stats()
-
-        t0 = time.time()
-        flash_result = flash_triton.flash_attention(Q, K, V)
-        torch.cuda.synchronize()
-    flash_time = (time.time() - t0) * 1000
-    flash_mem = torch.cuda.max_memory_allocated() / 1024**2
+    out_flash = flash_attention_backward.flash.apply(
+        Q_flash, K_flash, V_flash, Q_batch, K_batch
+    )
+    out_flash.sum().backward()
 
     # === numerical comparison ===
-    max_diff = (naive_result - flash_result).abs().max().item()
+    out_diff = (out_ref - out_flash).abs().max().item()
+    dQ_diff = (Q_ref.grad - Q_flash.grad).abs().max().item()
+    dK_diff = (K_ref.grad - K_flash.grad).abs().max().item()
+    dV_diff = (V_ref.grad - V_flash.grad).abs().max().item()
 
     print(
-        f"{seq_len:6d} | {naive_time:8.2f}ms | {flash_time:8.2f}ms | {naive_mem:8.1f}MB | {flash_mem:8.1f}MB | {max_diff:10.6f}"
+        f"{seq_len:6d} | {out_diff:12.6f} | {dQ_diff:12.6f} | {dK_diff:12.6f} | {dV_diff:12.6f}"
     )
