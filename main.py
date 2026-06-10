@@ -1,5 +1,5 @@
 import transformer
-import flash_attention_backward
+import flash_attention_backward_triton
 import torch
 
 torch.set_default_device("cuda")
@@ -7,8 +7,8 @@ torch.set_default_device("cuda")
 batch = 2
 dim = 64
 seq_lens = [128, 256, 512]
-Q_batch = 64
-K_batch = 64
+Q_batch = 32
+K_batch = 32
 
 print(
     f"{'seq_len':>6} | {'out_diff':>12} | {'dQ_diff':>12} | {'dK_diff':>12} | {'dV_diff':>12}"
@@ -33,7 +33,7 @@ for seq_len in seq_lens:
     K_flash = K.clone().detach().requires_grad_(True)
     V_flash = V.clone().detach().requires_grad_(True)
 
-    out_flash = flash_attention_backward.flash.apply(
+    out_flash = flash_attention_backward_triton.flash.apply(
         Q_flash, K_flash, V_flash, Q_batch, K_batch
     )
     out_flash.sum().backward()

@@ -1,5 +1,5 @@
 import transformer
-import flash_attention_backward
+import flash_attention_backward_triton
 import torch
 import time
 
@@ -7,9 +7,9 @@ torch.set_default_device("cuda")
 
 batch = 8
 dim = 64
-seq_lens = [512, 1024, 2048, 4096]
-Q_batch = 64
-K_batch = 64
+seq_lens = [512, 2048, 8192, 4096]
+Q_batch = 32
+K_batch = 32
 
 header = (
     f"{'seq_len':>6} | "
@@ -50,7 +50,7 @@ for seq_len in seq_lens:
     V_flash = V.clone().detach().requires_grad_(True)
 
     for _ in range(3):
-        out = flash_attention_backward.flash.apply(
+        out = flash_attention_backward_triton.flash.apply(
             Q_flash, K_flash, V_flash, Q_batch, K_batch
         )
         out.sum().backward()
@@ -58,7 +58,7 @@ for seq_len in seq_lens:
     torch.cuda.reset_peak_memory_stats()
 
     t0 = time.time()
-    out_flash = flash_attention_backward.flash.apply(
+    out_flash = flash_attention_backward_triton.flash.apply(
         Q_flash, K_flash, V_flash, Q_batch, K_batch
     )
     out_flash.sum().backward()
@@ -82,10 +82,10 @@ for seq_len in seq_lens:
     K2 = K.clone().detach()
     V2 = V.clone().detach()
     for _ in range(3):
-        _ = flash_attention_backward.flash.apply(Q2, K2, V2, Q_batch, K_batch)
+        _ = flash_attention_backward_triton.flash.apply(Q2, K2, V2, Q_batch, K_batch)
     torch.cuda.synchronize()
     t0 = time.time()
-    _ = flash_attention_backward.flash.apply(Q2, K2, V2, Q_batch, K_batch)
+    _ = flash_attention_backward_triton.flash.apply(Q2, K2, V2, Q_batch, K_batch)
     torch.cuda.synchronize()
     flash_fwd = (time.time() - t0) * 1000
 
